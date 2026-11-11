@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: "*/10 * * * *"   # every 10 min (GitHub may run it a few minutes late)
   workflow_dispatch: {}      # "Run workflow" button for manual checks
+  push:                      # run right away when the script or settings change
+    branches: [main]
+    paths: ["court_watch.py", "config.json", ".github/workflows/watch.yml"]
 
 permissions:
   contents: write
@@ -30,7 +33,8 @@ jobs:
 
       - name: Save new availability
         run: |
-          if git diff --quiet -- docs/data.json; then
+          # --porcelain also catches the file being brand new (first run), which git diff misses
+          if [ -z "$(git status --porcelain -- docs/data.json)" ]; then
             echo "No availability change."
             exit 0
           fi
