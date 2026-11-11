@@ -1,0 +1,42 @@
+name: Court Watch
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 min (GitHub may run it a few minutes late)
+  workflow_dispatch: {}      # "Run workflow" button for manual checks
+
+permissions:
+  contents: write
+
+concurrency:
+  group: court-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check availability and alert
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python court_watch.py
+
+      - name: Save new availability
+        run: |
+          if git diff --quiet -- docs/data.json; then
+            echo "No availability change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data.json
+          git commit -m "Update availability"
+          git pull --rebase -X theirs || true
+          git push

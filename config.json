@@ -1,0 +1,16 @@
+{
+  "venue": "TBCHubRichmond",
+  "venue_name": "Tennis BC Hub @ Richmond",
+  "timezone": "America/Vancouver",
+  "days_to_fetch": 14,
+
+  "min_minutes": 60,
+
+  "advance_days": 4,
+  "release_time": "07:30",
+
+  "alert_weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  "alert_earliest_start": "06:00",
+  "alert_latest_end": "23:30",
+  "alert_courts": []
+}

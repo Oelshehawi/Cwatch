@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Court Watch</title>
+<style>
+  :root {
+    --bg: #f6f7f5; --card: #ffffff; --ink: #1c2420; --muted: #66706a; --line: #e2e6e1;
+    --free: #2f9e5b; --free-ink: #ffffff; --free-soft: #d9f0e2; --locked: #b9c2bc; --accent: #1f6f43;
+    --chip: #eef1ed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121614; --card: #1b201d; --ink: #e8ece9; --muted: #98a29c; --line: #2c332f;
+      --free: #3fbf72; --free-ink: #0d1a12; --free-soft: #1f3a2a; --locked: #56605a; --accent: #6fd69a;
+      --chip: #252b28;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px 16px 48px; }
+  header h1 { font-size: 22px; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin: 18px 0 14px; }
+  .controls label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .seg { display: inline-flex; background: var(--chip); border-radius: 8px; padding: 2px; }
+  .seg button { border: 0; background: none; color: var(--ink); padding: 5px 10px; border-radius: 6px;
+                font: inherit; font-size: 13px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--card); box-shadow: 0 1px 2px rgba(0,0,0,.15); font-weight: 600; }
+  .next { background: var(--free-soft); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px; }
+  .next a { color: var(--accent); font-weight: 600; }
+  .day { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .day.locked { opacity: .8; }
+  .dayhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .dayhead h2 { font-size: 15px; margin: 0; }
+  .dayhead .meta { font-size: 12px; color: var(--muted); }
+  .dayhead a { font-size: 13px; color: var(--accent); text-decoration: none; font-weight: 600; }
+  .timeline { margin-top: 10px; }
+  .lane { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 8px; margin: 3px 0; }
+  .lane .name { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .track { position: relative; height: 20px; background: var(--chip); border-radius: 5px; overflow: hidden; }
+  .bar { position: absolute; top: 0; bottom: 0; background: var(--free); color: var(--free-ink); border-radius: 4px;
+         font-size: 11px; font-weight: 600; display: flex; align-items: center; padding: 0 5px; overflow: hidden;
+         white-space: nowrap; text-decoration: none; }
+  .locked .bar { background: var(--locked); color: var(--ink); }
+  .axis { display: grid; grid-template-columns: 58px 1fr; gap: 8px; }
+  .ticks { position: relative; height: 14px; font-size: 10px; color: var(--muted); }
+  .ticks span { position: absolute; transform: translateX(-50%); }
+  .slots { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .slot { font-size: 12.5px; background: var(--free-soft); color: var(--ink); border-radius: 6px; padding: 3px 8px;
+          text-decoration: none; }
+  .locked .slot { background: var(--chip); }
+  @media (max-width: 600px) { .bar { font-size: 0; } }
+  .empty { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .err { color: #c0392b; }
+  footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">Court Watch</h1>
+    <p id="sub">Loading…</p>
+  </header>
+
+  <div class="controls">
+    <label>Min length
+      <span class="seg" id="minSeg">
+        <button data-v="30">30m</button><button data-v="60">60m</button><button data-v="90">90m</button><button data-v="120">2h</button>
+      </span>
+    </label>
+    <label><input type="checkbox" id="bookableOnly"> Bookable now only</label>
+    <label><input type="checkbox" id="hideEmpty" checked> Hide days with nothing</label>
+  </div>
+
+  <div id="next"></div>
+  <div id="days"></div>
+  <footer>Green = free and bookable now. Grey = free, but members can't book that day yet.
+    Data refreshes about every 10 minutes. Booking happens on ClubSpark.</footer>
+</main>
+
+<script>
+const START = 6 * 60, END = 23 * 60 + 30, SPAN = END - START;
+const state = { min: 60, bookableOnly: false, hideEmpty: true, data: null };
+try {
+  const s = JSON.parse(localStorage.getItem("courtwatch") || "{}");
+  Object.assign(state, { min: s.min ?? 60, bookableOnly: !!s.bookableOnly, hideEmpty: s.hideEmpty ?? true });
+} catch (e) {}
+
+const hm = m => {  // 12-hour clock: 420 -> "7am", 1170 -> "7:30pm"
+  const h = Math.floor(m / 60) % 24, min = m % 60, h12 = h % 12 || 12, ap = h < 12 ? "am" : "pm";
+  return min ? `${h12}:${String(min).padStart(2, "0")}${ap}` : `${h12}${ap}`;
+};
+const parseHm = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
+const dur = m => m % 60 ? `${Math.floor(m / 60) ? Math.floor(m / 60) + "h " : ""}${m % 60}m` : `${m / 60}h`;
+const short = c => c.replace(/^Bubble\s+/i, "");
+const link = (d, date) => `https://clubspark.ca/${d.venue}/Booking/BookByDate#?date=${date}&role=member`;
+const fmtDate = iso => new Date(iso + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+function localNow(tz) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit",
+    day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, min: +p.hour * 60 + +p.minute };
+}
+
+function save() {
+  try { localStorage.setItem("courtwatch", JSON.stringify({ min: state.min, bookableOnly: state.bookableOnly, hideEmpty: state.hideEmpty })); } catch (e) {}
+}
+
+function render() {
+  const d = state.data; if (!d) return;
+  const now = localNow("America/Vancouver");
+  const bookable = new Set(d.bookable_dates);
+  const daysEl = document.getElementById("days"); daysEl.innerHTML = "";
+  let firstFree = null;
+
+  for (const [date, courts] of Object.entries(d.days)) {
+    if (date < now.date) continue;
+    const isBookable = bookable.has(date);
+    if (state.bookableOnly && !isBookable) continue;
+
+    const lanes = d.courts.map(c => {
+      const wins = (courts[c] || []).map(([s, e]) => [date === now.date ? Math.max(s, Math.ceil(now.min / 30) * 30) : s, e])
+        .filter(([s, e]) => e - s >= state.min);
+      return [c, wins];
+    });
+    const count = lanes.reduce((n, [, w]) => n + w.length, 0);
+    if (!count && state.hideEmpty) continue;
+
+    if (isBookable) for (const [c, w] of lanes) for (const [s, e] of w)
+      if (!firstFree || date < firstFree.date || (date === firstFree.date && s < firstFree.s)) firstFree = { date, c, s, e };
+
+    const el = document.createElement("section");
+    el.className = "day" + (isBookable ? "" : " locked");
+    const opens = isBookable ? "" : ` · opens ${fmtDate(addDays(date, -4))}, ${hm(parseHm(d.release_time))}`;
+    el.innerHTML = `<div class="dayhead"><h2>${fmtDate(date)}</h2>
+      <span class="meta">${count ? count + " free window" + (count > 1 ? "s" : "") : "Nothing free"}${opens}</span>
+      ${isBookable ? `<a href="${link(d, date)}" target="_blank" rel="noopener">Book on ClubSpark →</a>` : ""}</div>`;
+
+    if (count) {
+      const tl = document.createElement("div"); tl.className = "timeline";
+      for (const [c, wins] of lanes) {
+        const lane = document.createElement("div"); lane.className = "lane";
+        lane.innerHTML = `<span class="name">${short(c)}</span><div class="track"></div>`;
+        const track = lane.querySelector(".track");
+        for (const [s, e] of wins) {
+          const a = document.createElement(isBookable ? "a" : "span");
+          a.className = "bar";
+          a.style.left = ((Math.max(s, START) - START) / SPAN * 100) + "%";
+          a.style.width = ((Math.min(e, END) - Math.max(s, START)) / SPAN * 100) + "%";
+          a.textContent = e - s >= 180 ? `${hm(s)}–${hm(e)}` : hm(s);
+          a.title = `${c}: ${hm(s)}–${hm(e)} (${dur(e - s)})`;
+          if (isBookable) { a.href = link(d, date); a.target = "_blank"; a.rel = "noopener"; }
+          track.appendChild(a);
+        }
+        tl.appendChild(lane);
+      }
+      const axis = document.createElement("div"); axis.className = "axis";
+      axis.innerHTML = `<span></span><div class="ticks">${[6, 9, 12, 15, 18, 21].map(h =>
+        `<span style="left:${(h * 60 - START) / SPAN * 100}%">${hm(h * 60)}</span>`).join("")}</div>`;
+      tl.appendChild(axis);
+      el.appendChild(tl);
+      const list = document.createElement("div"); list.className = "slots";
+      const all = lanes.flatMap(([c, w]) => w.map(([s, e]) => ({ c, s, e }))).sort((a, b) => a.s - b.s || a.c.localeCompare(b.c));
+      for (const { c, s, e } of all) {
+        const chip = document.createElement(isBookable ? "a" : "span");
+        chip.className = "slot";
+        chip.innerHTML = `<b>${hm(s)}–${hm(e)}</b> ${short(c)} · ${dur(e - s)}`;
+        if (isBookable) { chip.href = link(d, date); chip.target = "_blank"; chip.rel = "noopener"; }
+        list.appendChild(chip);
+      }
+      el.appendChild(list);
+    }
+    daysEl.appendChild(el);
+  }
+  if (!daysEl.children.length) daysEl.innerHTML = `<p class="empty">Nothing free for ${dur(state.min)}+ in this range.</p>`;
+
+  document.getElementById("next").innerHTML = firstFree
+    ? `<div class="next">Next bookable ${dur(state.min)}+: <strong>${fmtDate(firstFree.date)} · ${short(firstFree.c)} · ${hm(firstFree.s)}–${hm(firstFree.e)}</strong>
+       &nbsp;<a href="${link(d, firstFree.date)}" target="_blank" rel="noopener">Book →</a></div>`
+    : `<div class="next">No bookable ${dur(state.min)}+ slots right now. Alerts will ping you when one opens.</div>`;
+
+  document.querySelectorAll("#minSeg button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.v === state.min));
+  document.getElementById("bookableOnly").checked = state.bookableOnly;
+  document.getElementById("hideEmpty").checked = state.hideEmpty;
+}
+
+function addDays(iso, n) {
+  const t = new Date(iso + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10);
+}
+
+document.getElementById("minSeg").addEventListener("click", e => {
+  if (e.target.dataset.v) { state.min = +e.target.dataset.v; save(); render(); }
+});
+document.getElementById("bookableOnly").addEventListener("change", e => { state.bookableOnly = e.target.checked; save(); render(); });
+document.getElementById("hideEmpty").addEventListener("change", e => { state.hideEmpty = e.target.checked; save(); render(); });
+
+fetch("data.json?" + Date.now()).then(r => r.json()).then(d => {
+  state.data = d;
+  document.getElementById("title").textContent = d.venue_name;
+  const changed = new Date(d.changed_at);
+  document.getElementById("sub").textContent =
+    `${d.courts.length} courts · availability last changed ${changed.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+  render();
+}).catch(err => {
+  document.getElementById("sub").innerHTML = `<span class="err">Couldn't load data.json (${err.message}).</span>`;
+});
+</script>
+</body>
+</html>
