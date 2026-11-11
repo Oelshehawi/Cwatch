@@ -1,10 +1,12 @@
 {
   "venue": "TBCHubRichmond",
   "venue_name": "Tennis BC Hub @ Richmond",
+  "venue_id": "3d706535-8793-4aa6-801c-8941880a17f5",
   "timezone": "America/Vancouver",
   "days_to_fetch": 14,
 
   "min_minutes": 60,
+  "book_minutes": 120,
 
   "advance_days": 4,
   "release_time": "07:30",

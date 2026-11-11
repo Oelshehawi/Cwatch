@@ -56,6 +56,27 @@
   .empty { font-size: 13px; color: var(--muted); margin-top: 6px; }
   .err { color: #c0392b; }
   footer { margin-top: 24px; font-size: 12px; color: var(--muted); }
+  a.bar, a.slot { cursor: pointer; }
+  dialog { border: 0; padding: 0; background: transparent; color: var(--ink); max-width: 420px; width: calc(100% - 32px); }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  .sheet { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .sheethead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  .sheethead h3 { margin: 0; font-size: 17px; }
+  .sheethead p { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+  .x { border: 0; background: var(--chip); color: var(--ink); border-radius: 50%; width: 30px; height: 30px; cursor: pointer; flex: none; }
+  .field { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .field select { font: inherit; font-size: 15px; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--bg); color: var(--ink); }
+  .field .seg { align-self: flex-start; flex-wrap: wrap; }
+  .seg button:disabled { opacity: .35; cursor: default; }
+  .summary { margin: 14px 0 0; font-size: 15px; font-weight: 600; }
+  .go { display: block; text-align: center; margin-top: 12px; padding: 12px; border-radius: 10px; background: var(--free);
+        color: var(--free-ink); font-weight: 700; text-decoration: none; }
+  .fine { font-size: 12px; color: var(--muted); margin: 10px 0 0; }
+  @media (max-width: 600px) {
+    dialog { margin: auto 0 0; width: 100%; max-width: none; }
+    .sheet { border-radius: 16px 16px 0 0; padding-bottom: 24px; }
+  }
 </style>
 </head>
 <body>
@@ -77,16 +98,34 @@
 
   <div id="next"></div>
   <div id="days"></div>
-  <footer>Green = free and bookable now. Grey = free, but members can't book that day yet.
-    Data refreshes about every 10 minutes. Booking happens on ClubSpark.</footer>
+  <footer>Green = free and bookable now (tap one to book). Grey = free, but members can't book that day yet.
+    Data refreshes about every 10 minutes. You confirm and pay on ClubSpark.</footer>
 </main>
+
+<dialog id="book">
+  <form method="dialog" class="sheet">
+    <div class="sheethead">
+      <div><h3 id="bkTitle"></h3><p id="bkFree"></p></div>
+      <button class="x" aria-label="Close">✕</button>
+    </div>
+    <label class="field">Start
+      <select id="bkStart"></select>
+    </label>
+    <div class="field">Length
+      <span class="seg" id="bkLen"></span>
+    </div>
+    <p class="summary" id="bkSummary"></p>
+    <a id="bkGo" class="go" target="_blank" rel="noopener">Book on ClubSpark →</a>
+    <p class="fine">Opens ClubSpark's booking form with this court and time filled in. Sign in there if asked, add players, then confirm and pay.</p>
+  </form>
+</dialog>
 
 <script>
 const START = 6 * 60, END = 23 * 60 + 30, SPAN = END - START;
-const state = { min: 60, bookableOnly: false, hideEmpty: true, data: null };
+const state = { min: 60, len: 120, bookableOnly: false, hideEmpty: true, data: null };
 try {
   const s = JSON.parse(localStorage.getItem("courtwatch") || "{}");
-  Object.assign(state, { min: s.min ?? 60, bookableOnly: !!s.bookableOnly, hideEmpty: s.hideEmpty ?? true });
+  Object.assign(state, { min: s.min ?? 60, len: s.len ?? 120, bookableOnly: !!s.bookableOnly, hideEmpty: s.hideEmpty ?? true });
 } catch (e) {}
 
 const hm = m => {  // 12-hour clock: 420 -> "7am", 1170 -> "7:30pm"
@@ -106,7 +145,7 @@ function localNow(tz) {
 }
 
 function save() {
-  try { localStorage.setItem("courtwatch", JSON.stringify({ min: state.min, bookableOnly: state.bookableOnly, hideEmpty: state.hideEmpty })); } catch (e) {}
+  try { localStorage.setItem("courtwatch", JSON.stringify({ min: state.min, len: state.len, bookableOnly: state.bookableOnly, hideEmpty: state.hideEmpty })); } catch (e) {}
 }
 
 function render() {
@@ -122,15 +161,15 @@ function render() {
     if (state.bookableOnly && !isBookable) continue;
 
     const lanes = d.courts.map(c => {
-      const wins = (courts[c] || []).map(([s, e]) => [date === now.date ? Math.max(s, Math.ceil(now.min / 30) * 30) : s, e])
+      const wins = (courts[c] || []).map(([s, e, sid]) => [date === now.date ? Math.max(s, Math.ceil(now.min / 30) * 30) : s, e, sid])
         .filter(([s, e]) => e - s >= state.min);
       return [c, wins];
     });
     const count = lanes.reduce((n, [, w]) => n + w.length, 0);
     if (!count && state.hideEmpty) continue;
 
-    if (isBookable) for (const [c, w] of lanes) for (const [s, e] of w)
-      if (!firstFree || date < firstFree.date || (date === firstFree.date && s < firstFree.s)) firstFree = { date, c, s, e };
+    if (isBookable) for (const [c, w] of lanes) for (const [s, e, sid] of w)
+      if (!firstFree || date < firstFree.date || (date === firstFree.date && s < firstFree.s)) firstFree = { date, c, s, e, sid };
 
     const el = document.createElement("section");
     el.className = "day" + (isBookable ? "" : " locked");
@@ -145,14 +184,14 @@ function render() {
         const lane = document.createElement("div"); lane.className = "lane";
         lane.innerHTML = `<span class="name">${short(c)}</span><div class="track"></div>`;
         const track = lane.querySelector(".track");
-        for (const [s, e] of wins) {
+        for (const [s, e, sid] of wins) {
           const a = document.createElement(isBookable ? "a" : "span");
           a.className = "bar";
           a.style.left = ((Math.max(s, START) - START) / SPAN * 100) + "%";
           a.style.width = ((Math.min(e, END) - Math.max(s, START)) / SPAN * 100) + "%";
           a.textContent = e - s >= 180 ? `${hm(s)}–${hm(e)}` : hm(s);
           a.title = `${c}: ${hm(s)}–${hm(e)} (${dur(e - s)})`;
-          if (isBookable) { a.href = link(d, date); a.target = "_blank"; a.rel = "noopener"; }
+          if (isBookable) bindBook(a, { c, date, s, e, sid });
           track.appendChild(a);
         }
         tl.appendChild(lane);
@@ -163,12 +202,12 @@ function render() {
       tl.appendChild(axis);
       el.appendChild(tl);
       const list = document.createElement("div"); list.className = "slots";
-      const all = lanes.flatMap(([c, w]) => w.map(([s, e]) => ({ c, s, e }))).sort((a, b) => a.s - b.s || a.c.localeCompare(b.c));
-      for (const { c, s, e } of all) {
+      const all = lanes.flatMap(([c, w]) => w.map(([s, e, sid]) => ({ c, s, e, sid }))).sort((a, b) => a.s - b.s || a.c.localeCompare(b.c));
+      for (const { c, s, e, sid } of all) {
         const chip = document.createElement(isBookable ? "a" : "span");
         chip.className = "slot";
         chip.innerHTML = `<b>${hm(s)}–${hm(e)}</b> ${short(c)} · ${dur(e - s)}`;
-        if (isBookable) { chip.href = link(d, date); chip.target = "_blank"; chip.rel = "noopener"; }
+        if (isBookable) bindBook(chip, { c, date, s, e, sid });
         list.appendChild(chip);
       }
       el.appendChild(list);
@@ -177,15 +216,67 @@ function render() {
   }
   if (!daysEl.children.length) daysEl.innerHTML = `<p class="empty">Nothing free for ${dur(state.min)}+ in this range.</p>`;
 
-  document.getElementById("next").innerHTML = firstFree
+  const nextEl = document.getElementById("next");
+  nextEl.innerHTML = firstFree
     ? `<div class="next">Next bookable ${dur(state.min)}+: <strong>${fmtDate(firstFree.date)} · ${short(firstFree.c)} · ${hm(firstFree.s)}–${hm(firstFree.e)}</strong>
-       &nbsp;<a href="${link(d, firstFree.date)}" target="_blank" rel="noopener">Book →</a></div>`
+       &nbsp;<a href="#">Book →</a></div>`
     : `<div class="next">No bookable ${dur(state.min)}+ slots right now. Alerts will ping you when one opens.</div>`;
+  if (firstFree) bindBook(nextEl.querySelector("a"), firstFree);
 
   document.querySelectorAll("#minSeg button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.v === state.min));
   document.getElementById("bookableOnly").checked = state.bookableOnly;
   document.getElementById("hideEmpty").checked = state.hideEmpty;
 }
+
+// ---- Booking panel: pick start + length, then open ClubSpark's booking form pre-filled ----
+const LENGTHS = [30, 60, 90, 120, 150, 180];
+let booking = null;
+
+function bookUrl(d, b, start, end) {
+  const info = (d.court_info || {})[b.c];
+  if (!info || !b.sid || !d.venue_id) return link(d, b.date);  // older data: fall back to the day's sheet
+  const q = new URLSearchParams({
+    "Contacts[0].IsPrimary": "true", "Contacts[0].IsMember": "true",
+    "Contacts[0].IsJunior": "false", "Contacts[0].IsPlayer": "true",
+    ResourceID: info.id, Date: b.date, SessionID: b.sid, StartTime: start, EndTime: end,
+    Category: 0, SubCategory: 0, VenueID: d.venue_id, ResourceGroupID: info.group,
+  });
+  return `https://clubspark.ca/${d.venue}/Booking/Book?${q}`;
+}
+
+function bindBook(el, b) {
+  el.href = "#";
+  el.addEventListener("click", ev => { ev.preventDefault(); openBook(b); });
+}
+
+function openBook(b) {
+  booking = { ...b, start: b.s, len: Math.min(state.len, b.e - b.s) };
+  document.getElementById("bkTitle").textContent = `${b.c} · ${fmtDate(b.date)}`;
+  document.getElementById("bkFree").textContent = `Free ${hm(b.s)}–${hm(b.e)} (${dur(b.e - b.s)})`;
+  const sel = document.getElementById("bkStart");
+  sel.innerHTML = "";
+  for (let t = b.s; t + 30 <= b.e; t += 30) sel.add(new Option(hm(t), t));
+  sel.value = b.s;
+  updateBook();
+  document.getElementById("book").showModal();
+}
+
+function updateBook() {
+  const d = state.data, b = booking;
+  const room = b.e - b.start;
+  if (b.len > room) b.len = Math.min(room, 180);
+  document.getElementById("bkLen").innerHTML = LENGTHS.map(m =>
+    `<button type="button" data-v="${m}" aria-pressed="${m === b.len}" ${m > room ? "disabled" : ""}>${dur(m)}</button>`).join("");
+  document.getElementById("bkSummary").textContent = `${hm(b.start)}–${hm(b.start + b.len)} · ${dur(b.len)} on ${short(b.c)}`;
+  document.getElementById("bkGo").href = bookUrl(d, b, b.start, b.start + b.len);
+}
+
+document.getElementById("bkStart").addEventListener("change", e => { booking.start = +e.target.value; updateBook(); });
+document.getElementById("bkLen").addEventListener("click", e => {
+  const v = +e.target.dataset.v;
+  if (v && !e.target.disabled) { booking.len = v; state.len = v; save(); updateBook(); }
+});
+document.getElementById("book").addEventListener("click", e => { if (e.target.id === "book") e.target.close(); });
 
 function addDays(iso, n) {
   const t = new Date(iso + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10);

@@ -28,6 +28,7 @@ shows it on a clean web page, and pushes a phone alert when a 60+ minute slot op
 | Setting | Meaning |
 |---|---|
 | `min_minutes` | Shortest free window worth an alert (default 60) |
+| `book_minutes` | Length the alert's Book buttons fill in (default 120 = 2h; shorter if the slot is shorter) |
 | `alert_weekdays` | e.g. `["Mon","Tue","Wed","Thu"]` for weeknights only |
 | `alert_earliest_start` / `alert_latest_end` | e.g. `"17:00"` / `"22:00"` for evenings only |
 | `alert_courts` | e.g. `["Bubble Court 1"]`; empty = all courts |

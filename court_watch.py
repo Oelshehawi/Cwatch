@@ -63,21 +63,25 @@ def fetch_schedule(cfg: dict, start: dt.date) -> dict:
     return fetch_json(f"https://clubspark.ca/v0/VenueBooking/{cfg['venue']}/GetVenueSessions?{query}")
 
 
-def free_windows(schedule: dict) -> tuple[list[str], dict[str, dict[str, list[list[int]]]]]:
-    """Return (court names, {date: {court: [[start, end], ...]}}) of merged free windows."""
-    courts = [r["Name"] for r in schedule["Resources"]]
-    days: dict[str, dict[str, list[list[int]]]] = {}
+def free_windows(schedule: dict) -> tuple[dict[str, dict], dict[str, dict[str, list[list]]]]:
+    """Return ({court: {id, group}}, {date: {court: [[start, end, session_id], ...]}}) of merged free windows.
+
+    Back-to-back free blocks are merged only when they belong to the same ClubSpark session,
+    since one booking can't span two sessions.
+    """
+    courts = {r["Name"]: {"id": r["ID"], "group": r["ResourceGroupID"]} for r in schedule["Resources"]}
+    days: dict[str, dict[str, list[list]]] = {}
     for res in schedule["Resources"]:
         for day in res["Days"]:
             date = day["Date"][:10]
-            windows: list[list[int]] = []
+            windows: list[list] = []
             for s in sorted(day["Sessions"], key=lambda s: s["StartTime"]):
                 if s["Category"] != FREE_CATEGORY or (s.get("Capacity") or 0) <= 0:
                     continue
-                if windows and windows[-1][1] == s["StartTime"]:
+                if windows and windows[-1][1] == s["StartTime"] and windows[-1][2] == s["ID"]:
                     windows[-1][1] = s["EndTime"]
                 else:
-                    windows.append([s["StartTime"], s["EndTime"]])
+                    windows.append([s["StartTime"], s["EndTime"], s["ID"]])
             days.setdefault(date, {c: [] for c in courts})[res["Name"]] = windows
     return courts, dict(sorted(days.items()))
 
@@ -91,8 +95,8 @@ def bookable_dates(cfg: dict, now: dt.datetime) -> list[str]:
     return [(now.date() + dt.timedelta(days=i)).isoformat() for i in range(n)]
 
 
-def alertable(cfg: dict, data: dict, now: dt.datetime) -> set[tuple[str, str, int, int]]:
-    """(date, court, start, end) windows that are bookable, upcoming, long enough and match the filters."""
+def alertable(cfg: dict, data: dict, now: dt.datetime) -> set[tuple]:
+    """(date, court, start, end, session_id) windows that are bookable, upcoming, long enough and match the filters."""
     today = now.date().isoformat()
     now_min = now.hour * 60 + now.minute
     earliest, latest = parse_hm(cfg["alert_earliest_start"]), parse_hm(cfg["alert_latest_end"])
@@ -105,42 +109,54 @@ def alertable(cfg: dict, data: dict, now: dt.datetime) -> set[tuple[str, str, in
         for court, windows in data["days"].get(date, {}).items():
             if courts_filter and court not in courts_filter:
                 continue
-            for start, end in windows:
+            for start, end, *rest in windows:
                 if date == today:
                     start = max(start, -(-now_min // 30) * 30)  # drop the part already in the past
                 start, end = max(start, earliest), min(end, latest)
                 if end - start >= cfg["min_minutes"]:
-                    out.add((date, court, start, end))
+                    out.add((date, court, start, end, rest[0] if rest else ""))
     return out
 
 
-def blocks(windows: set[tuple[str, str, int, int]]) -> set[tuple[str, str, int]]:
+def blocks(windows: set[tuple]) -> set[tuple[str, str, int]]:
     """Explode windows into 30-minute blocks so a window that grows also counts as new."""
-    return {(d, c, t) for d, c, s, e in windows for t in range(s, e, 30)}
+    return {(w[0], w[1], t) for w in windows for t in range(w[2], w[3], 30)}
 
 
 def booking_link(cfg: dict, date: str) -> str:
+    """ClubSpark's booking sheet for a whole day."""
     return f"https://clubspark.ca/{cfg['venue']}/Booking/BookByDate#?date={date}&role=member"
 
 
-def notify(cfg: dict, new: list[tuple[str, str, int, int]]) -> None:
+def book_link(cfg: dict, court: dict, date: str, start: int, end: int, session_id: str) -> str:
+    """ClubSpark's booking form, pre-filled with court, date and time (you still confirm and pay there)."""
+    query = urllib.parse.urlencode({
+        "Contacts[0].IsPrimary": "true", "Contacts[0].IsMember": "true",
+        "Contacts[0].IsJunior": "false", "Contacts[0].IsPlayer": "true",
+        "ResourceID": court["id"], "Date": date, "SessionID": session_id,
+        "StartTime": start, "EndTime": end, "Category": 0, "SubCategory": 0,
+        "VenueID": cfg["venue_id"], "ResourceGroupID": court["group"],
+    })
+    return f"https://clubspark.ca/{cfg['venue']}/Booking/Book?{query}"
+
+
+def notify(cfg: dict, courts: dict, new: list[tuple]) -> None:
     lines = []
-    for date, court, start, end in new:
+    for date, court, start, end, _ in new:
         d = dt.date.fromisoformat(date)
         lines.append(f"{d:%a %b} {d.day} · {court.replace('Bubble ', '')} · {span12(start, end)} ({end - start} min)")
     title = f"{len(new)} court slots opened" if len(new) > 1 else "Court slot opened"
     body = "\n".join(lines[:12]) + (f"\n+{len(lines) - 12} more" if len(lines) > 12 else "")
 
-    # Up to 3 tap-to-book buttons, one per day, each opening ClubSpark's sheet on that day.
-    actions, seen_dates = [], set()
-    for date, court, start, _ in new:
-        if date in seen_dates:
-            continue
-        seen_dates.add(date)
+    # Up to 3 buttons that open ClubSpark's booking form pre-filled for that slot,
+    # booking from the window's start for book_minutes (or the whole window if shorter).
+    actions = []
+    for date, court, start, end, sid in new[:3]:
         d = dt.date.fromisoformat(date)
-        actions.append(f"view, Book {d:%a} {t12(start)}, {booking_link(cfg, date)}")
-        if len(actions) == 3:
-            break
+        stop = min(end, start + cfg.get("book_minutes", 120))
+        label = f"{court.replace('Bubble Court ', 'Ct')} {d:%a} {t12(start)} {(stop - start) / 60:g}h"
+        url = book_link(cfg, courts[court], date, start, stop, sid) if sid else booking_link(cfg, date)
+        actions.append(f"view, {label}, {url}")
     topic = os.environ.get("NTFY_TOPIC", "").strip()
     if not topic or os.environ.get("DRY_RUN"):
         print(f"[alert, not sent] {title}\n{body}\n  buttons: {' | '.join(a.split(', ')[1] for a in actions)}")
@@ -169,7 +185,9 @@ def main() -> int:
     data = {
         "venue": cfg["venue"],
         "venue_name": cfg["venue_name"],
-        "courts": courts,
+        "venue_id": cfg["venue_id"],
+        "courts": list(courts),
+        "court_info": courts,
         "bookable_dates": bookable_dates(cfg, now),
         "release_time": cfg["release_time"],
         "min_minutes": cfg["min_minutes"],
@@ -185,7 +203,7 @@ def main() -> int:
         seen = blocks(alertable(cfg, previous, now))
         new = sorted(w for w in current_alertable if blocks({w}) - seen)
         if new:
-            notify(cfg, new)
+            notify(cfg, courts, new)
         else:
             print(f"No new openings ({len(current_alertable)} bookable {cfg['min_minutes']}+ min windows).")
 
