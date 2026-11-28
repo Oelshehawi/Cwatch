@@ -27,7 +27,6 @@
   }
  },
  "bookable_dates": [
-  "2026-11-27",
   "2026-11-28",
   "2026-11-29",
   "2026-11-30",
@@ -36,12 +35,6 @@
  "release_time": "07:30",
  "min_minutes": 60,
  "days": {
-  "2026-11-27": {
-   "Bubble Court 1": [],
-   "Bubble Court 2": [],
-   "Bubble Court 3": [],
-   "Bubble Court 4": []
-  },
   "2026-11-28": {
    "Bubble Court 1": [],
    "Bubble Court 2": [],
@@ -119,7 +112,13 @@
    "Bubble Court 2": [],
    "Bubble Court 3": [],
    "Bubble Court 4": []
+  },
+  "2026-12-11": {
+   "Bubble Court 1": [],
+   "Bubble Court 2": [],
+   "Bubble Court 3": [],
+   "Bubble Court 4": []
   }
  },
- "changed_at": "2026-11-27T07:46:23-07:00"
+ "changed_at": "2026-11-28T06:37:07-07:00"
 }
